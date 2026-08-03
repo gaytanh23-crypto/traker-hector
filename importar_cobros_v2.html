@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Importar Cobros Históricos</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;background:#F3F4F6;padding:1.5rem;color:#2C2C2A}
+h1{font-size:18px;font-weight:700;margin-bottom:4px}
+p{font-size:13px;color:#5F5E5A;margin-bottom:1.5rem}
+.card{background:white;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,0.08);padding:1.25rem;margin-bottom:1rem}
+.btn{padding:10px 20px;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;transition:background 0.15s}
+.btn-blue{background:#378ADD;color:white}
+.btn-blue:hover{background:#185FA5}
+.btn-green{background:#1D9E75;color:white}
+.btn-green:hover{background:#0F6E56}
+.btn-red{background:#E24B4A;color:white}
+.btn-red:hover{background:#A32D2D}
+.btn:disabled{opacity:0.5;cursor:not-allowed}
+.log{background:#1a1a2e;color:#e0e0e0;border-radius:6px;padding:1rem;font-family:monospace;font-size:12px;max-height:400px;overflow-y:auto;margin-top:1rem;line-height:1.6}
+.ok{color:#4ade80}
+.warn{color:#facc15}
+.err{color:#f87171}
+.info{color:#60a5fa}
+.badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600;margin-right:4px}
+.badge-ok{background:#E1F5EE;color:#0F6E56}
+.badge-skip{background:#FEF3C7;color:#92400E}
+.badge-err{background:#FCEBEB;color:#A32D2D}
+.progress{background:#E5E7EB;border-radius:99px;height:8px;margin:10px 0}
+.progress-bar{background:#1D9E75;height:100%;border-radius:99px;transition:width 0.3s}
+table{width:100%;border-collapse:collapse;font-size:12px;margin-top:0.5rem}
+th{text-align:left;padding:6px 8px;border-bottom:1px solid #E5E7EB;font-weight:600;color:#5F5E5A;font-size:11px}
+td{padding:6px 8px;border-bottom:1px solid #F3F4F6}
+.step{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.step-num{width:24px;height:24px;border-radius:50%;background:#378ADD;color:white;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+</style>
+</head>
+<body>
+
+<h1>📥 Importar Cobros Históricos</h1>
+<p>Este script importa los cobros de Enero–Junio 2026 sin afectar ahorros ni movimientos.</p>
+
+<div class="card">
+  <div class="step"><span class="step-num">1</span><strong>Conectando a Firebase...</strong></div>
+  <div id="statusFirebase" style="font-size:13px;color:#5F5E5A;margin-left:34px">Inicializando...</div>
+</div>
+
+<div class="card">
+  <div class="step"><span class="step-num">2</span><strong>Clientes en Firebase</strong></div>
+  <div id="statusClientes" style="font-size:13px;color:#5F5E5A;margin-left:34px">Esperando...</div>
+  <div id="tablaClientes" style="margin-left:34px"></div>
+</div>
+
+<div class="card">
+  <div class="step"><span class="step-num">3</span><strong>Importar cobros históricos</strong></div>
+  <div style="margin-left:34px">
+    <p style="margin-bottom:10px;margin-top:4px">Se importarán <strong>solo los meses marcados como OK</strong>. Los X y vacíos se omiten.</p>
+    <button class="btn btn-blue" id="btnPreview" onclick="previewImport()" disabled>🔍 Vista previa</button>
+    &nbsp;
+    <button class="btn btn-green" id="btnImport" onclick="iniciarImport()" disabled>🚀 Importar todo</button>
+    &nbsp;
+    <button class="btn btn-red" id="btnBorrar" onclick="borrarHistoricos()" disabled style="font-size:12px;padding:8px 14px">🗑 Borrar importados</button>
+  </div>
+  <div class="progress" style="margin:10px 34px 0"><div class="progress-bar" id="progressBar" style="width:0%"></div></div>
+  <div id="progressLabel" style="font-size:12px;color:#5F5E5A;margin-left:34px"></div>
+</div>
+
+<div class="card">
+  <div class="step"><span class="step-num">4</span><strong>Registro de operaciones</strong></div>
+  <div class="log" id="logBox">Esperando...</div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, collection, addDoc, getDocs, query, where, deleteDoc, doc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDSh6CEYxwJDzpqVGfif66s25DjYAr3DGY",
+  authDomain: "tracker-hector.firebaseapp.com",
+  projectId: "tracker-hector",
+  storageBucket: "tracker-hector.firebasestorage.app",
+  messagingSenderId: "1049401058801",
+  appId: "1:1049401058801:web:ce41f815c101795b895050"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// ---- DATOS HISTÓRICOS ----
+const HISTORICO = [
+  {nombre:"Maria Martina",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Sandra Garcia",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Deisy Garcia",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Yasmin Garcia",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Lorena Campos",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Yolanda Campos",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Lizeth Garcia",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Berenice padilla",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Eduardo Garcia",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Manuel Gonzales Flores",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Rafael Campos",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Antonia Rodriguez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Cuñada de Yolanda",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Maria Isabel Gomez Soto",meses:["2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Rosario Belen Peña Cobarrubias",meses:["2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Prima de Yolanda",meses:["2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Cristina Quintero",meses:["2026-01","2026-02","2026-03","2026-04","2026-05"]},
+  {nombre:"Aurorora Alvarez",meses:["2026-01","2026-02","2026-03","2026-04"]},
+  {nombre:"Erik Gonzalez Gonzales",meses:["2026-01","2026-02","2026-03","2026-04","2026-05"]},
+  {nombre:"Maria del Carmen Alvarez Gomez",meses:["2026-01","2026-02"]},
+  {nombre:"Ofelia Peña",meses:["2026-01","2026-02","2026-03","2026-04"]},
+  {nombre:"Mitzi Cobian",meses:["2026-01","2026-02","2026-03","2026-04","2026-05"]},
+  {nombre:"Fredi Gonzalez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05"]},
+  {nombre:"Estela Covarruvias Gomes",meses:["2026-01","2026-02","2026-03","2026-04","2026-05"]},
+  {nombre:"Elidia gomez peña",meses:["2026-01","2026-02","2026-03","2026-04","2026-05"]},
+  {nombre:"Yolanda Gonzales Gomez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05"]},
+  {nombre:"Veronica Flores Gomez",meses:["2026-01","2026-02","2026-03","2026-04"]},
+  {nombre:"Eduardo Alvarez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Lucia Jimenez",meses:["2026-06"]},
+  {nombre:"Ricardo Horacio Ramirez",meses:["2026-01","2026-02"]},
+  {nombre:"Irma Alvarez Contreras",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Gloria Estela Palos Mancilla",meses:["2026-01","2026-02","2026-03","2026-04","2026-05"]},
+  {nombre:"Jacinto VAZQUEZ",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Mario Soto",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Oswaldo Rafael Zoto Alvarez",meses:["2026-01","2026-02","2026-03","2026-04"]},
+  {nombre:"Consuelo Rodriguez Palos",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Elias Soto",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Jesus Rodriguez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Hector Daniel Estrada",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Yolanda Licon Carrillo",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Daniela Palos",meses:["2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Lizandro Palos",meses:["2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Margarita Justo Ramirez",meses:["2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Ñoy",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Sergio Rosales Campoas",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Don Juan",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Miguel Garcia Quintero",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Beatriz Bautista",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Alberto Garcia Michel",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Norma Garcia",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Evelia Larios Leal",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Maria Guadalupe Garcia",meses:["2026-01","2026-02","2026-03","2026-04","2026-05"]},
+  {nombre:"Carolina Larios",meses:["2026-01","2026-02","2026-03","2026-04","2026-05"]},
+  {nombre:"Francisco Ramirez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Patricia Diaz Rubio",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Jose Guadalupe Preciado",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Aldo Espitia",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Jissel Rodriguez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Valeria Villa",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Amalia Villa",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Rosa Amelia Ramirez Alvarez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Consuelo Uuernda flores",meses:["2026-01","2026-02","2026-03","2026-04"]},
+  {nombre:"Jorge Mancilla",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Maria del Rosario",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Endi",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Gilberto Garcia",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Ana Liliana Medina Arinas",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Oscar Rodriguez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Gustavo Ernesto Villa",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Maria Rodriguez Figueroa",meses:["2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Jose Angel",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Vanessa Judith Garcia Lopez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Daniela Villa",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Cyntia Mancilla",meses:["2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Mariano Bautista Espitia",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Angelina Larios Garcia",meses:["2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Ignacio Ramirez Mancilla",meses:["2026-02","2026-03","2026-04","2026-05"]},
+  {nombre:"Carol Villa",meses:["2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Adrian Villa",meses:["2026-01","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Dolores",meses:["2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Ximena",meses:["2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Alma Rocio Peña Perez",meses:["2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Eduardo Villa Hernandez",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Maria Rosa Ortiz Cobarrubias",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Dalia esposa de Endi",meses:["2026-05","2026-06"]},
+  {nombre:"Jose Alfredo Carvajal",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Mario Cobian Cisneros",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Martha Naranjo",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Yanet de la Torre",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Jose Orlando Michel Avalos",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Herlinda Santana",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Torrico",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Madre Maricela",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Jose Luis Garcia David",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Alma Nallely Rosales Alvarez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Veronica Santos",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Lupita Santos",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Terecita Cobarrubias",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Teresa Pineda",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Jose Cruz Pineda",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Miguel Angel Alvarez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Manuel Ramirez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Veronica Vallejo",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Israel Estrella",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Toribia David Santos",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Susana Baltazar Hernandez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Fabiola Santos",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Esmeralda David Flores",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Emilia Rosales",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Manuel Pineda",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Raul Bautista Hernandez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Alma Leticia Vallejo Montes",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Rosendo Ramirez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Hugo Rosales",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Juan Hernadez Gomez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Luis Santana",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Maria Victoria Baltazar Hernandez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Sonia David Flores",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Saul Pineda Estrella",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Damaso Virgen Avalos",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Jaime Estrada Alvarez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Abel Santana",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Fernando Virgen Avalos",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Victoria Pineda",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Jaime Pineda Estrella",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Toribia David Santos servicio#2",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Daniel Quintero Osorio",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Rafael Pineda Osorio",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Edgardo Pineda",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Juanita Elizabeth Baltazar Hernandez",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"LisandroCorona",meses:["2026-04","2026-05"]},
+  {nombre:"Jose Guillermo Virgen Avalos",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Lorena Garcia Baltazar",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Ulises Hernandez Diaz",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Rosa Ramirez Baltazar",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Santiago Lucas de la Torre",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Jairo Estrella",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Maria del socorro Garcia Lopez",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Jorge Ramos",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Shakira Iriran Castillo",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Laidy Montes Avalos",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Isabel Avalos",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Daniel Duarte",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Rafaela Cobarrubias Rosales",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Alicia Avalos Diaz",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Alicia Avalos Diaz Servicio #2",meses:["2026-04","2026-05","2026-06"]},
+  {nombre:"Alejandra Garcia Ramirez",meses:["2026-05","2026-06"]},
+  {nombre:"Felipe David Flores",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Cecilia Torrico",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Silvina Bautizta",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Soila Ramos",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Martha Magali Estrada",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Osbaldo Corona",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Briana Marlem Bautizta",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Delegacion Coatlancillo",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Susi Corona",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Abel Cisneros",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Telesecundaria 16 de septiembre",meses:["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06"]},
+  {nombre:"Faustino Michel",meses:["2026-06"]},
+  {nombre:"Blanca Liliana Zamora Santos",meses:["2026-06"]},
+  {nombre:"Pedro Quintero",meses:["2026-06"]},
+  {nombre:"Rosa Ramos",meses:["2026-06"]},
+  {nombre:"Salvador Herandez",meses:["2026-06"]},
+  {nombre:"Edgar Fernando Bautista",meses:["2026-06"]},
+  {nombre:"Efrain Lopez Cisneros",meses:["2026-06"]},
+  {nombre:"Jose Angel Alvarez Peña",meses:["2026-06"]},
+];
+
+let clientesFirebase = [];
+let uid = null;
+
+function log(msg, tipo='info'){
+  const box = document.getElementById('logBox');
+  const color = tipo==='ok'?'ok':tipo==='warn'?'warn':tipo==='err'?'err':'info';
+  box.innerHTML += `<span class="${color}">${msg}</span>\n`;
+  box.scrollTop = box.scrollHeight;
+}
+
+function norm(s){ return (s||'').toLowerCase().trim().replace(/\s+/g,' ').normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
+
+function buscarCliente(nombre){
+  const n = norm(nombre);
+  // Exacto
+  let c = clientesFirebase.find(c=>norm(c.nombre)===n);
+  if(c) return c;
+  // Parcial — el nombre del histórico está contenido en el del firebase o viceversa
+  c = clientesFirebase.find(c=>norm(c.nombre).includes(n) || n.includes(norm(c.nombre)));
+  return c || null;
+}
+
+onAuthStateChanged(auth, async user => {
+  if(user){
+    uid = user.uid;
+    document.getElementById('statusFirebase').innerHTML = `<span style="color:#1D9E75">✅ Conectado como ${user.email}</span>`;
+    await cargarClientes();
+  } else {
+    document.getElementById('statusFirebase').innerHTML = `<span style="color:#E24B4A">❌ No autenticado. Abre primero tu app principal en otra pestaña e inicia sesión.</span>`;
+  }
+});
+
+async function cargarClientes(){
+  document.getElementById('statusClientes').textContent = 'Cargando...';
+  const snap = await getDocs(collection(db,`users/${uid}/clientes`));
+  clientesFirebase = snap.docs.map(d=>({id:d.id,...d.data()}));
+  document.getElementById('statusClientes').innerHTML = `<span style="color:#1D9E75">✅ ${clientesFirebase.length} clientes encontrados en Firebase</span>`;
+
+  // Mostrar tabla de coincidencias
+  let html = '<table><tr><th>Nombre en tabla</th><th>Encontrado en Firebase</th><th>Estado</th></tr>';
+  let encontrados=0, noEncontrados=0;
+  HISTORICO.forEach(h=>{
+    const c = buscarCliente(h.nombre);
+    if(c){ encontrados++; html+=`<tr><td>${h.nombre}</td><td>${c.nombre}</td><td><span class="badge badge-ok">✅ Match</span></td></tr>`; }
+    else { noEncontrados++; html+=`<tr><td>${h.nombre}</td><td style="color:#E24B4A">No encontrado</td><td><span class="badge badge-err">⚠️ Sin match</span></td></tr>`; }
+  });
+  html+='</table>';
+  document.getElementById('tablaClientes').innerHTML = html;
+  document.getElementById('statusClientes').innerHTML += ` · <span style="color:#1D9E75">${encontrados} con match</span> · <span style="color:#E24B4A">${noEncontrados} sin match</span>`;
+
+  document.getElementById('btnPreview').disabled = false;
+  document.getElementById('btnImport').disabled = false;
+  document.getElementById('btnBorrar').disabled = false;
+}
+
+window.previewImport = () => {
+  log('=== VISTA PREVIA ===', 'info');
+  let total = 0;
+  HISTORICO.forEach(h=>{
+    const c = buscarCliente(h.nombre);
+    if(c){ log(`✅ ${h.nombre} → ${h.meses.length} meses (${h.meses.join(', ')})`, 'ok'); total+=h.meses.length; }
+    else { log(`⚠️ Sin match: ${h.nombre}`, 'warn'); }
+  });
+  log(`Total cobros a importar: ${total}`, 'info');
+};
+
+window.iniciarImport = async () => {
+  if(!confirm(`¿Importar cobros históricos de ${HISTORICO.length} clientes? Solo se importan meses con OK, sin afectar ahorros ni movimientos.`)) return;
+  document.getElementById('btnImport').disabled = true;
+  document.getElementById('btnPreview').disabled = true;
+  log('=== INICIANDO IMPORTACIÓN ===', 'info');
+
+  const cobrosExistentes = await getDocs(collection(db,`users/${uid}/cobros`));
+  const existSet = new Set(cobrosExistentes.docs.map(d=>`${d.data().clienteId}_${d.data().mes}`));
+
+  let importados=0, omitidos=0, sinMatch=0, total=0;
+  HISTORICO.forEach(h=>total+=h.meses.length);
+
+  let procesados=0;
+  for(const h of HISTORICO){
+    const c = buscarCliente(h.nombre);
+    if(!c){ log(`⚠️ Sin match: ${h.nombre}`, 'warn'); sinMatch++; continue; }
+    for(const mes of h.meses){
+      const key = `${c.id}_${mes}`;
+      if(existSet.has(key)){
+        log(`⏭ Ya existe: ${c.nombre} ${mes}`, 'warn');
+        omitidos++;
+      } else {
+        await addDoc(collection(db,`users/${uid}/cobros`),{
+          clienteId:c.id, clienteNombre:c.nombre, localidad:c.localidad||'',
+          monto:c.costo||0, mes, fecha:'01/'+mes.split('-')[1]+'/'+mes.split('-')[0],
+          historico:true, formaPago:'', cuentaAhorro:'',
+          ts:serverTimestamp()
+        });
+        log(`✅ ${c.nombre} → ${mes}`, 'ok');
+        importados++;
+        existSet.add(key);
+      }
+      procesados++;
+      const pct = Math.round((procesados/total)*100);
+      document.getElementById('progressBar').style.width = pct+'%';
+      document.getElementById('progressLabel').textContent = `${procesados} de ${total} cobros procesados (${pct}%)`;
+    }
+  }
+
+  log(`\n=== COMPLETADO ===`, 'info');
+  log(`✅ Importados: ${importados}`, 'ok');
+  log(`⏭ Omitidos (ya existían): ${omitidos}`, 'warn');
+  log(`⚠️ Sin match en Firebase: ${sinMatch}`, 'warn');
+  document.getElementById('btnImport').disabled = false;
+};
+
+window.borrarHistoricos = async () => {
+  if(!confirm('¿Borrar TODOS los cobros marcados como históricos? Esto no se puede deshacer.')) return;
+  log('=== BORRANDO HISTÓRICOS ===', 'warn');
+  const snap = await getDocs(query(collection(db,`users/${uid}/cobros`), where('historico','==',true)));
+  let borrados=0;
+  for(const d of snap.docs){ await deleteDoc(doc(db,`users/${uid}/cobros`,d.id)); borrados++; }
+  log(`🗑 Borrados: ${borrados} cobros históricos`, 'warn');
+};
+</script>
+</body>
+</html>
